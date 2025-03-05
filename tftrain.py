@@ -3,8 +3,8 @@ from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 import numpy as np
-import os
-from sklearn.model_selection import train_test_split
+#import os
+#from sklearn.model_selection import train_test_split
 
 # Define constants
 DATA_DIR = "Images/"
@@ -50,10 +50,15 @@ def build_cnn(input_shape=(IMG_SIZE, IMG_SIZE, 1), num_classes=NUM_CLASSES):
         layers.MaxPooling2D((2, 2)),  # Reduce spatial size
 
         # 2. Second standard convolution (instead of separable conv)
+        layers.Conv2D(16, (1, 1), activation="relu", padding="same"),
+        # layers.MaxPooling2D((2, 2)),
+
+        # 3. Third standard convolution
         layers.Conv2D(16, (3, 3), activation="relu", padding="same"),
         layers.MaxPooling2D((2, 2)),
 
-        # 3. Third standard convolution
+        layers.Conv2D(32, (1, 1), activation="relu", padding="same"),
+
         layers.Conv2D(32, (3, 3), activation="relu", padding="same"),
         layers.MaxPooling2D((2, 2)),
 

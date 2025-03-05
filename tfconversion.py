@@ -1,6 +1,6 @@
 import tensorflow as tf
 import numpy as np
-import tensorflow_model_optimization as tfmot
+# import tensorflow_model_optimization as tfmot
 
 # Load the trained model
 model = tf.keras.models.load_model("asl_saved_model")  # or "asl_saved_model"
@@ -13,7 +13,7 @@ converter = tf.lite.TFLiteConverter.from_keras_model(model)
 converter.optimizations = [tf.lite.Optimize.DEFAULT]  # Enables post-training quantization
 def representative_dataset():
     for _ in range(100):
-        yield [np.random.rand(1, 64, 64, 1).astype(np.float32)]
+        yield [np.random.rand(1, 96, 96, 1).astype(np.float32)]
         
 
 
