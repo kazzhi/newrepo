@@ -3,6 +3,9 @@ from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 import numpy as np
+import collections
+from tensorflow.keras import regularizers
+
 #import os
 #from sklearn.model_selection import train_test_split
 
@@ -20,67 +23,96 @@ def preprocess_image(image, label):
     image = image / 255.0
     return image, label
 
-# Load dataset from directory
-full_dataset = tf.keras.preprocessing.image_dataset_from_directory(
+
+val_dataset = tf.keras.preprocessing.image_dataset_from_directory(
     DATA_DIR,
     image_size=(IMG_SIZE, IMG_SIZE),  # Load images at 224x224 first
     batch_size=BATCH_SIZE,
-    shuffle=True
+    shuffle=True,
+    validation_split = 0.2,
+    subset = "validation",
+    seed = 123
 ).map(preprocess_image)  # Apply preprocessing
 
 
-total_batches = len(full_dataset)
-train_batches = int(total_batches * 0.8)
-train_dataset = full_dataset.take(train_batches)
-val_dataset = full_dataset.skip(train_batches)
+# Load the training dataset
+train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
+    DATA_DIR,
+    image_size=(IMG_SIZE, IMG_SIZE),
+    batch_size=BATCH_SIZE,
+    shuffle=True
+)
 
+# Save class names before mapping
+train_class_names = train_dataset.class_names
+
+# Apply preprocessing
+train_dataset = train_dataset.map(preprocess_image)
+
+# Load the test dataset
 test_dataset = tf.keras.preprocessing.image_dataset_from_directory(
     TEST_DIR,
-    image_size=(IMG_SIZE, IMG_SIZE),  # No resizing needed
+    image_size=(IMG_SIZE, IMG_SIZE),
     batch_size=BATCH_SIZE,
-    color_mode="rgb",
     shuffle=False
-).map(preprocess_image)
+)
+
+# Save class names before mapping
+test_class_names = test_dataset.class_names
+
+# Apply preprocessing
+test_dataset = test_dataset.map(preprocess_image)
+
+# Print class names
+print("Training dataset class names:", train_class_names)
+print("Test dataset class names:", test_class_names)
+
+#test_dataset = test_dataset.map(lambda x, y: (x / 255.0, y))
+
 
 def build_cnn(input_shape=(IMG_SIZE, IMG_SIZE, 1), num_classes=NUM_CLASSES):
     """Optimized CNN model for ESP32-S3 with ESP-NN support."""
     model = keras.Sequential([
         # 1. First standard convolution
-        layers.Conv2D(8, (3, 3), activation="relu", padding="same", input_shape=input_shape),
-        layers.MaxPooling2D((2, 2)),  # Reduce spatial size
+        layers.Conv2D(16, (3, 3), activation="relu", padding="same", input_shape=input_shape),
+        layers.MaxPooling2D((2, 2)),  # Downsample
 
-        # 2. Second standard convolution (instead of separable conv)
-        layers.Conv2D(16, (1, 1), activation="relu", padding="same"),
-        # layers.MaxPooling2D((2, 2)),
+        # Second Block: Depthwise + Pointwise Conv
+        layers.DepthwiseConv2D((3, 3), activation="relu", padding="same"),  
+        layers.Conv2D(32, (1, 1), activation="relu", padding="same"),  
+        #  layers.MaxPooling2D((2, 2)),  # Downsample
 
-        # 3. Third standard convolution
-        layers.Conv2D(16, (3, 3), activation="relu", padding="same"),
-        layers.MaxPooling2D((2, 2)),
+        # Third Block: Depthwise + Pointwise Conv
+        layers.DepthwiseConv2D((3, 3), activation="relu", padding="same"),  
+        layers.Conv2D(64, (1, 1), activation="relu", padding="same"),  
+        layers.MaxPooling2D((2, 2)),  # Downsample
 
-        layers.Conv2D(32, (1, 1), activation="relu", padding="same"),
-
-        layers.Conv2D(32, (3, 3), activation="relu", padding="same"),
-        layers.MaxPooling2D((2, 2)),
-
-        # 4. Fully Connected Layer
+        # Fully Connected Layers
         layers.Flatten(),
-        layers.Dense(64, activation="relu"),
+        layers.Dense(256, activation="relu",  kernel_regularizer=regularizers.l2(0.001)),
+        layers.BatchNormalization(),
+         layers.Dropout(0.5), # Reduce overfitting
+        #layers.BatchNormalization(),
+        layers.Dense(num_classes, activation="softmax"),
+       
 
-        # 5. Output layer
-        layers.Dense(num_classes, activation="softmax")
+        
+        
     ])
     return model
 
-model = build_optimized_cnn()
-model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+model = build_cnn()
+optimizer = keras.optimizers.Adam(learning_rate=0.0003, decay=1e-6)
+loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+model.compile(optimizer=optimizer, loss=loss, metrics=["accuracy"])
 model.summary()
 
 # Data augmentation for training
 datagen = ImageDataGenerator(
-    rotation_range=15,
-    width_shift_range=0.1,
-    height_shift_range=0.1,
-    horizontal_flip=True
+    rotation_range=10,
+    width_shift_range=0.05,
+    height_shift_range=0.05,
+    #horizontal_flip=True
 )
 
 # Convert datasets to NumPy for augmentation
@@ -109,12 +141,36 @@ datagen.fit(X_train)
 train_generator = datagen.flow(X_train, y_train, batch_size=BATCH_SIZE)
 val_generator = datagen.flow(X_val, y_val, batch_size=BATCH_SIZE)
 
-# Train the model
-model.fit(train_generator, validation_data=val_generator, epochs=10)
+print("Unique train labels:", np.unique(y_train))
+print("Unique validation labels:", np.unique(y_val))
+train_label_counts = collections.Counter(y_train)
+print("Class Distribution:", train_label_counts)
 
-# Evaluate on the test dataset
-test_loss, test_accuracy = model.evaluate(test_dataset)
-print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
+# Check if training and test labels match
+train_labels = np.unique(y_train)
+test_labels = np.unique(np.concatenate([y.numpy() for _, y in test_dataset]))
+
+print("Unique train labels:", train_labels)
+print("Unique test labels:", test_labels)
+
+# Verify the mapping
+assert np.array_equal(train_labels, test_labels), "🚨 Label mismatch between training and test sets!"
+
+
+
+class_counts = collections.Counter(y_train)
+total = sum(class_counts.values())
+class_weights = {cls: total/(count * NUM_CLASSES) for cls, count in class_counts.items()}
+
+# # Include in model.fit()
+# # Train the model
+# early_stop = keras.callbacks.EarlyStopping(monitor="val_loss", patience=3, restore_best_weights=True)
+
+# model.fit(train_generator, validation_data=val_generator, epochs=10, callbacks=[early_stop], class_weight=class_weights)
+
+# # Evaluate on the test dataset
+# test_loss, test_accuracy = model.evaluate(test_dataset)
+# print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
 
 # Save the trained model
 model.save("optimized_asl_model")
